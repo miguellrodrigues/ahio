@@ -20,12 +20,16 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-
 import ahio.abstract_driver
 import nidaqmx as nq
 import numpy as np
 from nidaqmx.constants import EncoderType
 from enum import Enum
+
+
+class ahioDriverInfo(ahio.abstract_driver.AbstractahioDriverInfo):
+    NAME = 'Quanser Rotpen'
+    AVAILABLE = True
 
 
 class Encoder:
@@ -79,47 +83,42 @@ class Encoder:
     self.task.stop()
 
 
-class ahioDriverInfo(ahio.abstract_driver.AbstractahioDriverInfo):
-    NAME = 'Quanser Rotpen'
-    AVAILABLE = True
-
-
 class Driver(ahio.abstract_driver.AbstractDriver):
-    _serial = None
-
-    Pins = Enum(
-        'Pins',
-        'DE AV0')
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        pass
-
-    def generate_tasks():
-        task_dir = nq.Task()
-        task_dir.di_channels.add_di_chan(
-            "Dev1/port0/line0:7",
-            "direction",
-        )
-
-        task_dir.start()
-
-        task_voltage = nq.Task()
-        task_voltage.ao_channels.add_ao_voltage_chan(
-            "Dev1/ao0:1",
-            "voltage",
-        )
-
-        return [task_dir, task_voltage]
-
-    def destroy_tasks(tasks):
-        for task in tasks:
-            task.stop()
+    Pins = Enum('Pins', 'ENCODERS OUTPUT')
 
     def setup(self):
-        self._tasks = self.generate_tasks()
+        # verify if nidaqmx driver is installed
+        try:
+            nq.system.driver_version
+        except:
+            raise RuntimeError(
+                'NIDAQmx driver not installed. Please install it to use this driver.'
+            )
+        
+
+        def generate_tasks():
+            task_dir = nq.Task()
+            task_dir.di_channels.add_di_chan(
+                "Dev1/port0/line0:7",
+                "direction",
+            )
+
+            task_dir.start()
+
+            task_voltage = nq.Task()
+            task_voltage.ao_channels.add_ao_voltage_chan(
+                "Dev1/ao0:1",
+                "voltage",
+            )
+
+            return [task_dir, task_voltage]
+
+        def destroy_tasks(tasks):
+            for task in tasks:
+                task.stop()
+
+        self._tasks = generate_tasks()
+        self.destroy_tasks = destroy_tasks
         
         for task in self._tasks:
             task.start()
@@ -145,52 +144,34 @@ class Driver(ahio.abstract_driver.AbstractDriver):
 
         self._encoders = [base_encoder, pendulum_encoder]
 
-    def __clamp(self, value, min, max):
-        return sorted((min, value, max))[1]
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass
 
     def __create_pin_info(self, pid, pwm=False):
-        is_analog = pid.name.startswith('A')
+        is_input = pid.name == 'ENCODERS'
 
-        obj = {
+        return {
             'id': pid,
-            'name': None,
+            'name': pid.name,
             'analog': {
-                'input': is_analog,
-                'output': False,
-                'read_range': (0, 1023) if is_analog else None,
-                'write_range': None
+                'input': is_input,
+                'output': not is_input,
             },
             'digital': {
-                'input': not is_analog,
-                'output': not is_analog,
-                'pwm': not is_analog and pwm
+                'input': False,
+                'output': False,
+                'pwm': pwm
             }
         }
-        if is_analog:
-            obj['name'] = 'Analog %s' % (pid.value - 14)
-        else:
-            obj['name'] = 'Digital %s' % (pid.value - 1)
-        return obj
 
     def available_pins(self):
-        pins = [p for p in Driver.Pins]
-
-        pins = [self.__create_pin_info(pin) for pin in pins]
-    
-        return sorted(pins, key=lambda pin: pin['id'].value)
-
-    def _pin_direction(self, pin):
-        return ahio.Direction.Output if pin.name.startswith('V') else ahio.Direction.Input
-
-    def _pin_type(self, pin):
-        pt = ahio.PortType
-        return pt.Analog if pin.name.startswith('A') else pt.Digital
+        return [self.__create_pin_info(pin) for pin in Driver.Pins]
 
     def _write(self, pin, value):
-        if self._pin_direction(pin) == ahio.Direction.Input:
-            return
-    
-        self.write_task.write(value)
+       self.write_task.write(value)
 
     def _read(self, pin):
         dir_value = int(self.direction_task.read())
@@ -202,7 +183,3 @@ class Driver(ahio.abstract_driver.AbstractDriver):
         self._encoders[1].update(pendulum_dir)
 
         return [self._encoders[0].read(), self._encoders[1].read()]
-
-    def analog_references(self):
-        return [r for r in Driver.AnalogReferences]
-
