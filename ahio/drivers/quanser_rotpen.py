@@ -142,7 +142,8 @@ class Driver(ahio.abstract_driver.AbstractDriver):
             positive_dir=128
         )
 
-        self._encoders = [base_encoder, pendulum_encoder]
+        self._base_encoder = base_encoder
+        self._pendulum_encoder = pendulum_encoder
 
     def __enter__(self):
         return self
@@ -179,7 +180,10 @@ class Driver(ahio.abstract_driver.AbstractDriver):
         base_dir = dir_value & (1 << 6)
         pendulum_dir = dir_value & (1 << 7)
 
-        self._encoders[0].update(base_dir)
-        self._encoders[1].update(pendulum_dir)
+        self._base_encoder.update(base_dir)
+        self._pendulum_encoder.update(pendulum_dir)
 
-        return [self._encoders[0].read(), self._encoders[1].read()]
+        return [
+            self._base_encoder.read(),
+            self._pendulum_encoder.read()
+        ]
