@@ -84,7 +84,7 @@ class Encoder:
 
 
 class Driver(ahio.abstract_driver.AbstractDriver):
-    Pins = Enum('Pins', 'ENCODERS OUTPUT')
+    Pins = Enum('Pins', 'ENCODER0 ENCODER1 OUTPUT')
 
     def setup(self):
         # verify if nidaqmx driver is installed
@@ -94,7 +94,6 @@ class Driver(ahio.abstract_driver.AbstractDriver):
             raise RuntimeError(
                 'NIDAQmx driver not installed. Please install it to use this driver.'
             )
-        
 
         def generate_tasks():
             task_dir = nq.Task()
@@ -107,24 +106,25 @@ class Driver(ahio.abstract_driver.AbstractDriver):
 
             task_voltage = nq.Task()
             task_voltage.ao_channels.add_ao_voltage_chan(
-                "Dev1/ao0:1",
+                "Dev1/ao0",
                 "voltage",
             )
 
-            return [task_dir, task_voltage]
+            return task_dir, task_voltage
 
         def destroy_tasks(tasks):
             for task in tasks:
                 task.stop()
 
-        self._tasks = generate_tasks()
         self.destroy_tasks = destroy_tasks
-        
-        for task in self._tasks:
-            task.start()
 
-        self.direction_task = self._tasks[0]
-        self.write_task = self._tasks[1]
+        direction_task, voltage_task = generate_tasks()
+
+        self.direction_task = direction_task
+        self.write_task = voltage_task
+
+        self.direction_task.start()
+        self.write_task.start()
 
         base_encoder = Encoder(
             channel="Dev1/ctr0",
@@ -152,7 +152,7 @@ class Driver(ahio.abstract_driver.AbstractDriver):
         pass
 
     def __create_pin_info(self, pid, pwm=False):
-        is_input = pid.name == 'ENCODERS'
+        is_input = pid.name.startswith('ENCODER')
 
         return {
             'id': pid,
@@ -164,7 +164,7 @@ class Driver(ahio.abstract_driver.AbstractDriver):
             'digital': {
                 'input': False,
                 'output': False,
-                'pwm': pwm
+                'pwm': False
             }
         }
 
@@ -172,7 +172,10 @@ class Driver(ahio.abstract_driver.AbstractDriver):
         return [self.__create_pin_info(pin) for pin in Driver.Pins]
 
     def _write(self, pin, value):
-       self.write_task.write(value)
+        if pin.name != 'OUTPUT':
+           return
+        
+        self.write_task.write(value)
 
     def _read(self, pin):
         dir_value = int(self.direction_task.read())
@@ -180,10 +183,11 @@ class Driver(ahio.abstract_driver.AbstractDriver):
         base_dir = dir_value & (1 << 6)
         pendulum_dir = dir_value & (1 << 7)
 
-        self._base_encoder.update(base_dir)
-        self._pendulum_encoder.update(pendulum_dir)
+        pendulum_read = self._pendulum_encoder.update(pendulum_dir)
+        base_read = self._base_encoder.update(base_dir)
 
-        return [
-            self._base_encoder.read(),
-            self._pendulum_encoder.read()
-        ]
+        if pin.name == 'ENCODER0':
+            return base_read
+        elif pin.name == 'ENCODER1':
+            return pendulum_read
+        
